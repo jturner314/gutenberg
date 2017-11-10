@@ -6,7 +6,83 @@ use tera::{Tera, Context, Value, to_value};
 use errors::{Result, ResultExt};
 
 lazy_static!{
-    pub static ref SHORTCODE_RE: Regex = Regex::new(r#"\{(?:%|\{)\s+([[:word:]]+?)\(([[:word:]]+?="?.+?"?)?\)\s+(?:%|\})\}"#).unwrap();
+    pub static ref SHORTCODE_RE: Regex = Regex::new(r#"(?x)
+      \{(?:%|\{)                # opening {{ or {%
+      \s+
+      (?P<name>                 # shortcode name
+        [[:word:]]+?
+      )
+      \((?P<arg_list>           # start of arg list
+        (?:
+          [[:word:]]+?          # argument name
+          =
+          (?:                   # argument value
+            "[^"]*?" |          # string
+            true | false |      # bool
+            (?:                 # float
+              [+-]?
+              (?:
+                [0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)? |
+                [0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)? |
+                [0-9]+[eE][+-]?[0-9]+ |
+                NaN
+              )
+            ) |
+            [+-]?[0-9]+         # integer
+          )
+          ,\s*                  # separating comma
+        )*
+        [[:word:]]+?            # argument name
+        =
+        (?:                     # argument value
+          "[^"]*?" |            # string
+          true | false |        # bool
+          (?:                   # float
+            [+-]?
+            (?:
+              [0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)? |
+              [0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)? |
+              [0-9]+[eE][+-]?[0-9]+ |
+              NaN
+            )
+          ) |
+          [+-]?[0-9]+           # integer
+        )
+      )?\)                      # end of arg list
+      \s+
+      (?:%|\})\}                # closing }} or %}
+    "#).unwrap();
+
+    pub static ref ARG_NAME_VALUE_RE: Regex = Regex::new(r#"(?x)
+      (?P<name>           # argument name
+        [[:word:]]+?
+      )
+      =
+      (?:                 # argument value
+        (?:"(?P<string>   # string
+          [^"]*?
+        )") |
+        (?P<true>         # true (bool)
+          true
+        ) |
+        (?P<false>        # false (bool)
+          false
+        ) |
+        (?P<float>        # float
+          [+-]?
+          (?:
+            [0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)? |
+            [0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)? |
+            [0-9]+[eE][+-]?[0-9]+ |
+            NaN
+          )
+        ) |
+        (?P<integer>      # integer
+          [+-]?[0-9]+
+        )
+      )
+      (?:,\s*|\z)         # separating comma or end of text
+    "#).unwrap();
 }
 
 /// A shortcode that has a body
@@ -44,49 +120,34 @@ impl ShortCode {
     }
 }
 
-/// Parse a shortcode without a body
+/// Parse a shortcode (not including the body)
 pub fn parse_shortcode(input: &str) -> (String, HashMap<String, Value>) {
     let mut args = HashMap::new();
     let caps = SHORTCODE_RE.captures(input).unwrap();
-    // caps[0] is the full match
-    let name = &caps[1];
+    let name = caps.name("name").unwrap().as_str();
 
-    if let Some(arg_list) = caps.get(2) {
-        for arg in arg_list.as_str().split(',') {
-            let bits = arg.split('=').collect::<Vec<_>>();
-            let arg_name = bits[0].trim().to_string();
-            let arg_val = bits[1].replace("\"", "");
-
-            // Regex captures will be str so we need to figure out if they are
-            // actually str or bool/number
-            if input.contains(&format!("{}=\"{}\"", arg_name, arg_val)) {
-                // that's a str, just add it
-                args.insert(arg_name, to_value(arg_val).unwrap());
-                continue;
-            }
-
-            if input.contains(&format!("{}=true", arg_name)) {
+    if let Some(arg_list) = caps.name("arg_list") {
+        let mut remaining = arg_list.as_str();
+        while !remaining.is_empty() {
+            let caps = ARG_NAME_VALUE_RE.captures(remaining).unwrap();
+            let arg_name = caps.name("name").unwrap().as_str().to_owned();
+            if let Some(mat) = caps.name("string") {
+                args.insert(arg_name, to_value(mat.as_str()).unwrap());
+            } else if let Some(_) = caps.name("true") {
                 args.insert(arg_name, to_value(true).unwrap());
-                continue;
-            }
-
-            if input.contains(&format!("{}=false", arg_name)) {
+            } else if let Some(_) = caps.name("false") {
                 args.insert(arg_name, to_value(false).unwrap());
-                continue;
+            } else if let Some(mat) = caps.name("float") {
+                let num: f64 = mat.as_str().parse().unwrap();
+                args.insert(arg_name, to_value(num).unwrap());
+            } else if let Some(mat) = caps.name("integer") {
+                let num: i64 = mat.as_str().parse().unwrap();
+                args.insert(arg_name, to_value(num).unwrap());
+            } else {
+                unreachable!();
             }
-
-            // Not a string or a bool, a number then?
-            if arg_val.contains('.') {
-                if let Ok(float) = arg_val.parse::<f64>() {
-                    args.insert(arg_name, to_value(float).unwrap());
-                }
-                continue;
-            }
-
-            // must be an integer
-            if let Ok(int) = arg_val.parse::<i64>() {
-                args.insert(arg_name, to_value(int).unwrap());
-            }
+            // Remove this arg from the remaining text.
+            remaining = &remaining[caps.get(0).unwrap().end()..];
         }
     }
 
@@ -161,11 +222,45 @@ mod tests {
     }
 
     #[test]
-    fn can_parse_shortcode_number() {
-        let (name, args) = parse_shortcode(r#"{% test(int=42, float=42.0, autoplay=true) %}"#);
+    fn can_parse_shortcode_float() {
+        let (name, args) = parse_shortcode("{% test(\
+            float=42.0, neg=-42., pos=+0.42, dec=.42, \
+            exp=42e3, pos_exp=+42e+3, neg_exp=-42.0e-3, \
+            nan=NaN, autoplay=true\
+        ) %}");
+        assert_eq!(name, "test");
+        assert_eq!(args["float"], 42.0);
+        assert_eq!(args["neg"], -42.);
+        assert_eq!(args["pos"], 0.42);
+        assert_eq!(args["dec"], 0.42);
+        assert_eq!(args["exp"], 42e3);
+        assert_eq!(args["pos_exp"], 42e+3);
+        assert_eq!(args["neg_exp"], -42.0e-3);
+        assert!(args["nan"].is_null());
+        assert_eq!(args["autoplay"], true);
+    }
+
+    #[test]
+    fn can_parse_shortcode_integer() {
+        let (name, args) = parse_shortcode("{% test(int=42, pos=+42, neg=-42, autoplay=true) %}");
         assert_eq!(name, "test");
         assert_eq!(args["int"], 42);
-        assert_eq!(args["float"], 42.0);
+        assert_eq!(args["pos"], 42);
+        assert_eq!(args["neg"], -42);
         assert_eq!(args["autoplay"], true);
+    }
+
+    #[test]
+    fn can_parse_shortcode_string_with_comma() {
+        let (name, args) = parse_shortcode(r#"{% test(id="foo,bar") %}"#);
+        assert_eq!(name, "test");
+        assert_eq!(args["id"], "foo,bar");
+    }
+
+    #[test]
+    fn can_parse_shortcode_string_with_closing_paren_brace() {
+        let (name, args) = parse_shortcode(r#"{% test(id="foo) %}") %}"#);
+        assert_eq!(name, "test");
+        assert_eq!(args["id"], "foo) %}");
     }
 }

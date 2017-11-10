@@ -49,12 +49,12 @@ While theoretically an argument name could be a number, it will not be possible 
 
 Argument values can be of 4 types:
 
-- string: surrounded by double quotes `"..."`
+- string: surrounded by double quotes `"..."` (no escaping is performed)
 - bool: `true` or `false`
-- float: a number with a `.` in it
+- float: a number with a `.` or `e` in it, or `NaN` (which is interpreted as no value provided)
 - integer: a number without a `.` in it
 
-Malformed values will be silently ignored.
+Malformed values will cause the shortcode to be silently ignored.
 
 ### Shortcodes without body
 
