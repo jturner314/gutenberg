@@ -5,9 +5,9 @@ authors = ["Vincent Prouillet <vincent@wearewizards.io>"]
 
 [dependencies]
 tera = "0.10"
-regex = "0.2"
-lazy_static = "0.2"
 syntect = { version = "1", features = ["static-onig"] }
+pest = "1.0.0-beta"
+pest_derive = "1.0.0-beta"
 pulldown-cmark = "0"
 slug = "0.1"
 serde = "1.0"

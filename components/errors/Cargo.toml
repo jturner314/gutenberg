@@ -5,5 +5,6 @@ authors = ["Vincent Prouillet <vincent@wearewizards.io>"]
 
 [dependencies]
 error-chain = "0.10"
+pest = "1.0.0-beta"
 tera = "0.10"
 toml = "0.4"

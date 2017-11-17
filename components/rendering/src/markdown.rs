@@ -10,7 +10,6 @@ use errors::Result;
 use utils::site::resolve_internal_link;
 use context::Context;
 use highlighting::{SYNTAX_SET, THEME_SET};
-use short_code::{SHORTCODE_RE, ShortCode, parse_shortcode, render_simple_shortcode};
 use table_of_contents::{TempHeader, Header, make_table_of_contents};
 
 
@@ -28,17 +27,6 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
     // Set while parsing
     let mut error = None;
     let mut highlighter: Option<HighlightLines> = None;
-    // the markdown parser will send several Text event if a markdown character
-    // is present in it, for example `hello_test` will be split in 2: hello and _test.
-    // Since we can use those chars in shortcode arguments, we need to collect
-    // the full shortcode somehow first
-    let mut current_shortcode = String::new();
-    let mut shortcode_block = None;
-    // shortcodes live outside of paragraph so we need to ensure we don't close
-    // a paragraph that has already been closed
-    let mut added_shortcode = false;
-    // Don't transform things that look like shortcodes in code blocks
-    let mut in_code_block = false;
     // If we get text in header, we need to insert the id and a anchor
     let mut in_header = false;
     // pulldown_cmark can send several text events for a title if there are markdown
@@ -70,22 +58,15 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
     // Defaults to a 0 level so not a real header
     // It should be an Option ideally but not worth the hassle to update
     let mut temp_header = TempHeader::default();
-    let mut clear_shortcode_block = false;
 
     let mut opts = Options::empty();
     opts.insert(OPTION_ENABLE_TABLES);
     opts.insert(OPTION_ENABLE_FOOTNOTES);
 
     {
-
         let parser = Parser::new_ext(content, opts).map(|event| {
-            if clear_shortcode_block {
-                clear_shortcode_block = false;
-                shortcode_block = None;
-            }
-
             match event {
-            Event::Text(mut text) => {
+            Event::Text(text) => {
                 // Header first
                 if in_header {
                     if header_created {
@@ -103,87 +84,16 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
                     return Event::Html(Owned(String::new()));
                 }
 
-                // if we are in the middle of a code block
+                // Apply syntax highlighting to code block
                 if let Some(ref mut highlighter) = highlighter {
                     let highlighted = &highlighter.highlight(&text);
                     let html = styles_to_coloured_html(highlighted, IncludeBackground::Yes);
                     return Event::Html(Owned(html));
                 }
 
-                if in_code_block {
-                    return Event::Text(text);
-                }
-
-                // Are we in the middle of a shortcode that somehow got cut off
-                // by the markdown parser?
-                if current_shortcode.is_empty() {
-                    if text.starts_with("{{") && !text.ends_with("}}") {
-                        current_shortcode += &text;
-                    } else if text.starts_with("{%") && !text.ends_with("%}") {
-                        current_shortcode += &text;
-                    }
-                } else {
-                    current_shortcode += &text;
-                }
-
-                if current_shortcode.ends_with("}}") || current_shortcode.ends_with("%}") {
-                    text = Owned(current_shortcode.clone());
-                    current_shortcode = String::new();
-                }
-
-                // Shortcode without body
-                if shortcode_block.is_none() && text.starts_with("{{") && text.ends_with("}}") && SHORTCODE_RE.is_match(&text) {
-                    let (name, args) = parse_shortcode(&text);
-
-                    added_shortcode = true;
-                    match render_simple_shortcode(context.tera, &name, &args) {
-                        // Make before and after cleaning up of extra <p> / </p> tags more parallel.
-                        // Or, in other words:
-                        // TERRIBLE HORRIBLE NO GOOD VERY BAD HACK
-                        Ok(s) => return Event::Html(Owned(format!("</p>{}<p>", s))),
-                        Err(e) => {
-                            error = Some(e);
-                            return Event::Html(Owned(String::new()));
-                        }
-                    }
-                }
-
-                // Shortcode with a body
-                if shortcode_block.is_none() && text.starts_with("{%") && text.ends_with("%}") {
-                    if SHORTCODE_RE.is_match(&text) {
-                        let (name, args) = parse_shortcode(&text);
-                        shortcode_block = Some(ShortCode::new(&name, args));
-                    }
-                    // Don't return anything
-                    return Event::Text(Owned(String::new()));
-                }
-
-                // If we have some text while in a shortcode, it's either the body
-                // or the end tag
-                if shortcode_block.is_some() {
-                    if let Some(ref mut shortcode) = shortcode_block {
-                        if text.trim() == "{% end %}" {
-                            added_shortcode = true;
-                            clear_shortcode_block = true;
-                            match shortcode.render(context.tera) {
-                                Ok(s) => return Event::Html(Owned(format!("</p>{}", s))),
-                                Err(e) => {
-                                    error = Some(e);
-                                    return Event::Html(Owned(String::new()));
-                                }
-                            }
-                        } else {
-                            shortcode.append(&text);
-                            return Event::Html(Owned(String::new()));
-                        }
-                    }
-                }
-
-                // Business as usual
                 Event::Text(text)
             },
             Event::Start(Tag::CodeBlock(ref info)) => {
-                in_code_block = true;
                 if !should_highlight {
                     return Event::Html(Owned("<pre><code>".to_owned()));
                 }
@@ -200,7 +110,6 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
                 Event::Html(Owned(snippet))
             },
             Event::End(Tag::CodeBlock(_)) => {
-                in_code_block = false;
                 if !should_highlight{
                     return Event::Html(Owned("</code></pre>\n".to_owned()))
                 }
@@ -233,9 +142,7 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
                 }
                 event
             }
-            // need to know when we are in a code block to disable shortcodes in them
             Event::Start(Tag::Code) => {
-                in_code_block = true;
                 if in_header {
                     temp_header.push("<code>");
                     return Event::Html(Owned(String::new()));
@@ -243,7 +150,6 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
                 event
             },
             Event::End(Tag::Code) => {
-                in_code_block = false;
                 if in_header {
                     temp_header.push("</code>");
                     return Event::Html(Owned(String::new()));
@@ -264,21 +170,6 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
                 temp_header = TempHeader::default();
                 Event::Html(Owned(val))
             },
-            // If we added shortcodes, don't close a paragraph since there's none
-            Event::End(Tag::Paragraph) => {
-                if added_shortcode {
-                    added_shortcode = false;
-                    return Event::Html(Owned("".to_owned()));
-                }
-                event
-            },
-            // Ignore softbreaks inside shortcodes
-            Event::SoftBreak => {
-                if shortcode_block.is_some() {
-                    return Event::Html(Owned("".to_owned()));
-                }
-                event
-            },
              _ => {
                  // println!("event = {:?}", event);
                  event
@@ -286,10 +177,6 @@ pub fn markdown_to_html(content: &str, context: &Context) -> Result<(String, Vec
             }});
 
         cmark::html::push_html(&mut html, parser);
-    }
-
-    if !current_shortcode.is_empty() {
-        return Err(format!("A shortcode was not closed properly:\n{:?}", current_shortcode).into());
     }
 
     match error {

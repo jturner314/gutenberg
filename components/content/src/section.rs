@@ -11,7 +11,7 @@ use errors::{Result, ResultExt};
 use utils::fs::read_file;
 use utils::templates::render_template;
 use utils::site::get_reading_analytics;
-use rendering::{Context, Header, markdown_to_html};
+use rendering::{Context, Header, markdown_to_html, render_shortcodes};
 
 use page::Page;
 use file_info::FileInfo;
@@ -106,7 +106,7 @@ impl Section {
             permalinks,
             self.meta.insert_anchor_links.unwrap()
         );
-        let res = markdown_to_html(&self.raw_content, &context)?;
+        let res = markdown_to_html(&render_shortcodes(&self.raw_content, &context)?, &context)?;
         self.content = res.0;
         self.toc = res.1;
         Ok(())

@@ -50,3 +50,7 @@ members = [
     "components/templates",
     "components/utils",
 ]
+
+[patch.crates-io]
+pest_derive = { git = "https://github.com/jturner314/pest.git", branch = "master" }
+tera = { git = "https://github.com/jturner314/tera.git", branch = "master" }

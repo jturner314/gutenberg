@@ -14,7 +14,7 @@ use utils::fs::{read_file, find_related_assets};
 use utils::site::get_reading_analytics;
 use utils::templates::render_template;
 use front_matter::{PageFrontMatter, InsertAnchor, split_page_content};
-use rendering::{Context, Header, markdown_to_html};
+use rendering::{Context, Header, markdown_to_html, render_shortcodes};
 
 use file_info::FileInfo;
 
@@ -150,13 +150,13 @@ impl Page {
             permalinks,
             anchor_insert
         );
-        let res = markdown_to_html(&self.raw_content, &context)?;
+        let res = markdown_to_html(&render_shortcodes(&self.raw_content, &context)?, &context)?;
         self.content = res.0;
         self.toc = res.1;
         if self.raw_content.contains("<!-- more -->") {
             self.summary = Some({
                 let summary = self.raw_content.splitn(2, "<!-- more -->").collect::<Vec<&str>>()[0];
-                markdown_to_html(summary, &context)?.0
+                markdown_to_html(&render_shortcodes(summary, &context)?, &context)?.0
             })
         }
 

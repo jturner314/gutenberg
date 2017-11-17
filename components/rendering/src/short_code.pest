@@ -1,0 +1,55 @@
+start = ${ soi ~ body ~ eoi}
+
+body = ${ (block_shortcode | inline_literal | inline_shortcode | text)* }
+text = @{ (!(block_shortcode | inline_literal | inline_shortcode | block_end) ~ any)+ }
+
+block_shortcode = ${ block_start ~ body ~ block_end }
+block_start = _{ "{%" ~ whitespace+ ~ shortcode_expr ~ whitespace+ ~ "%}" }
+block_end = _{ "{% end %}" }
+
+inline_literal = ${ "{{" ~ whitespace+ ~ literal ~ whitespace+ ~ "}}" }
+
+inline_shortcode = ${ "{{" ~ whitespace+ ~ shortcode_expr ~ whitespace+ ~ "}}" }
+
+shortcode_expr = !{ ident ~ "(" ~ (arg ~ ("," ~ arg)* ~ ","?)? ~ ")" }
+arg = !{ ident ~ "=" ~ literal }
+
+ident = @{ ident_start ~ ident_rest* }
+ident_start = @{ 'a'..'z' | 'A'..'Z' | "_" }
+ident_rest = @{ ident_start | '0'..'9' }
+
+literal = { string | raw_string | bool | float | integer }
+
+string = ${ "\"" ~ string_body ~ "\"" }
+string_body = ${ (non_escape | "\\" ~ escape | "\\u{" ~ unicode_escape ~ "}")* }
+non_escape = @{ (!("\\" | "\0" | "\"") ~ any)+ }
+escape = @{ "\"" | "\\" | "n" | "r" | "t" | "0" | "x" ~ hex_digit{2} | ("\n" ~ whitespace*) }
+unicode_escape = @{ hex_digit{1, 6} }
+
+raw_string = ${ "r" ~ push("#"*) ~ "\"" ~ raw_string_body ~ "\"" ~ pop }
+raw_string_body = @{ (!("\"" ~ peek) ~ any)* }
+
+bool = @{ "true" | "false" }
+
+float = ${
+    neg_sign? ~ dec_body ~ dec_point ~ dec_body? ~ exponent? |
+    neg_sign? ~ dec_body? ~ dec_point ~ dec_body ~ exponent? |
+    neg_sign? ~ dec_body ~ exponent
+}
+exponent = ${ ("E" | "e") ~ ("+" | neg_sign)? ~ dec_body }
+
+integer = ${ neg_sign? ~ (bin_body | oct_body | hex_body | dec_body) }
+bin_body = ${ "0b" ~ (bin_digit | ignore_digit)+ }
+oct_body = ${ "0o" ~ (oct_digit | ignore_digit)+ }
+hex_body = ${ "0x" ~ (hex_digit | ignore_digit)+ }
+dec_body = ${ (dec_digit | ignore_digit)+ }
+
+neg_sign = @{ "-" }
+dec_point = @{ "." }
+ignore_digit = _{ "_" }
+bin_digit = @{ "0" | "1" }
+oct_digit = @{ '0'..'7' }
+hex_digit = @{ '0'..'9' | 'A'..'F' | 'a'..'f' }
+dec_digit = @{ '0'..'9' }
+
+whitespace = _{ " " | "\t" | "\r" | "\n" }
